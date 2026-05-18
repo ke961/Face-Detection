@@ -1,5 +1,7 @@
-from deepface import DeepFace
+
 import cv2
+from deepface import DeepFace
+import tensorflow
 
 cap = cv2.VideoCapture(0)
 
