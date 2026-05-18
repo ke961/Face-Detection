@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 import face_recognition
+
 import time
 
 
@@ -51,6 +52,7 @@ face_locations = []
 face_names = []
 
 
+
 # MAIN LOOP
 
 while True:
@@ -71,7 +73,9 @@ while True:
 
         face_names = []
 
-        for encoding in face_encodings:
+
+        for (top, right,bottom,left),encoding in zip(face_locations,
+                                                     face_encodings):
             matches = face_recognition.compare_faces(known_face_encodings, encoding, tolerance=0.5)
             name = "Unknown"
 
@@ -84,6 +88,10 @@ while True:
                     name = known_face_names[best_match]
 
             face_names.append(name)
+
+
+
+
 
    
     # DRAW RESULTS (SMOOTH)
@@ -101,7 +109,10 @@ while True:
         cv2.rectangle(frame, (left, bottom - 30), (right, bottom), (0, 255, 0), cv2.FILLED)
 
         cv2.putText(frame, name, (left + 6, bottom - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+    
+
 
     cv2.imshow("Smooth Face Recognition", frame)
 
