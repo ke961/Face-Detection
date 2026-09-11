@@ -483,10 +483,186 @@ def draw_minimal_hud(frame, fps, face_count, dominant_emotion, vibe):
     cv2.putText(frame, f"FPS: {fps:.0f}", (x0 + badge_w - 65, y0 + 23), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 180), 1)
 
 
+def compute_group_vibe(tracked_faces):
+    """Average the vibe index across all tracked faces for group mood summary."""
+    if not tracked_faces:
+        return 50.0
+    vibes = [compute_vibe_index(f["emotion_scores"]) for f in tracked_faces]
+    return float(np.mean(vibes))
+
+
+def draw_face_comparison_card(frame, face, x0, y0, card_w, card_h, face_sparkline):
+    """
+    Render a single face's compact emotion comparison card.
+    Shows: name/ID header, dominant emotion badge, 7-emotion mini bars, vibe gauge.
+    """
+    dominant = face["dominant_emotion"]
+    scores = face["emotion_scores"]
+    name = face.get("name")
+    face_id = face.get("id", 0)
+    cfg = EMOTION_CONFIG.get(dominant.lower(), EMOTION_CONFIG["neutral"])
+    color = cfg["color"]
+
+    # Card background (glassmorphism)
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + card_w, y0 + card_h), (20, 20, 26), -1)
+    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+    cv2.rectangle(frame, (x0, y0), (x0 + card_w, y0 + card_h), color, 1)
+
+    # Left accent strip
+    cv2.rectangle(frame, (x0, y0), (x0 + 4, y0 + card_h), color, -1)
+
+    # Header: Name or Face ID
+    header = name.capitalize() if name else f"Face #{face_id}"
+    cv2.putText(frame, header, (x0 + 10, y0 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
+
+    # Dominant emotion badge (compact)
+    conf = scores.get(dominant, 0.0)
+    badge_text = f"{cfg['label']} {conf:.0f}%"
+    (tw, _), _ = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+    badge_x = x0 + card_w - tw - 14
+    cv2.rectangle(frame, (badge_x - 4, y0 + 5), (badge_x + tw + 4, y0 + 22), color, -1)
+    text_c = (0, 0, 0) if dominant.lower() in ["happy", "surprise", "neutral"] else (255, 255, 255)
+    cv2.putText(frame, badge_text, (badge_x, y0 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, text_c, 1)
+
+    # Mini emotion bars
+    order = ["happy", "neutral", "surprise", "sad", "angry", "fear", "disgust"]
+    bar_y = y0 + 28
+    bar_max_w = card_w - 100
+    for emo in order:
+        score = scores.get(emo, 0.0)
+        ecfg = EMOTION_CONFIG.get(emo, EMOTION_CONFIG["neutral"])
+        emo_color = ecfg["color"]
+
+        # Emotion label (abbreviated)
+        abbrev = emo[:3].upper()
+        cv2.putText(frame, abbrev, (x0 + 10, bar_y + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (160, 160, 170), 1)
+
+        # Bar background
+        bar_x = x0 + 42
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_max_w, bar_y + 8), (35, 35, 40), -1)
+
+        # Bar fill
+        fill_w = int(bar_max_w * (score / 100.0))
+        if fill_w > 0:
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + 8), emo_color, -1)
+
+        # Score percentage
+        cv2.putText(frame, f"{score:.0f}%", (bar_x + bar_max_w + 4, bar_y + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (190, 190, 195), 1)
+        bar_y += 13
+
+    # Per-face vibe gauge
+    vibe = compute_vibe_index(scores)
+    vibe_y = bar_y + 4
+    if vibe > 70:
+        vibe_color = (50, 205, 50)
+    elif vibe >= 45:
+        vibe_color = (220, 220, 220)
+    else:
+        vibe_color = (34, 34, 220)
+
+    cv2.putText(frame, f"VIBE: {vibe:.0f}%", (x0 + 10, vibe_y + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (180, 180, 185), 1)
+    gauge_x = x0 + 72
+    gauge_w = card_w - 86
+    cv2.rectangle(frame, (gauge_x, vibe_y), (gauge_x + gauge_w, vibe_y + 8), (35, 35, 40), -1)
+    gauge_fill = int(gauge_w * (vibe / 100.0))
+    if gauge_fill > 0:
+        cv2.rectangle(frame, (gauge_x, vibe_y), (gauge_x + gauge_fill, vibe_y + 8), vibe_color, -1)
+
+    # Per-face mini sparkline
+    if face_sparkline and len(face_sparkline) >= 2:
+        spark_y = vibe_y + 14
+        spark_h = 20
+        spark_w = card_w - 20
+        cv2.rectangle(frame, (x0 + 10, spark_y), (x0 + 10 + spark_w, spark_y + spark_h), (25, 25, 30), -1)
+
+        pts = []
+        n = len(face_sparkline)
+        for i, val in enumerate(face_sparkline):
+            px = int(x0 + 10 + (i / max(1, n - 1)) * spark_w)
+            py = int(spark_y + spark_h - (val / 100.0) * spark_h)
+            py = int(np.clip(py, spark_y + 1, spark_y + spark_h - 1))
+            pts.append((px, py))
+        pts_arr = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [pts_arr], False, vibe_color, 1, cv2.LINE_AA)
+        cv2.circle(frame, pts[-1], 2, (255, 255, 255), -1)
+
+
+def draw_face_comparison_panel(frame, tracked_faces, per_face_sparklines):
+    """
+    Render the right-side multi-face comparison panel.
+    Shows a per-face card for every tracked face plus a group mood summary.
+    """
+    if not tracked_faces:
+        return
+
+    h, w = frame.shape[:2]
+    panel_w = 260
+    card_h = 160
+    header_h = 36
+    footer_h = 44
+    max_cards = min(len(tracked_faces), 4)  # Cap at 4 to prevent overflow
+    panel_h = header_h + max_cards * (card_h + 6) + footer_h
+    panel_h = min(panel_h, h - 32)  # Prevent exceeding frame height
+
+    x0 = w - panel_w - 16
+    y0 = 16
+
+    # Panel background (glassmorphism)
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + panel_w, y0 + panel_h), (14, 14, 18), -1)
+    cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+    cv2.rectangle(frame, (x0, y0), (x0 + panel_w, y0 + panel_h), (70, 70, 80), 1)
+
+    # Panel header
+    cv2.putText(frame, "MULTI-FACE COMPARE", (x0 + 10, y0 + 24), cv2.FONT_HERSHEY_DUPLEX, 0.52, (255, 255, 255), 1)
+    face_count_text = f"{len(tracked_faces)} face{'s' if len(tracked_faces) != 1 else ''}"
+    cv2.putText(frame, face_count_text, (x0 + panel_w - 70, y0 + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 180), 1)
+
+    # Separator line
+    cv2.line(frame, (x0 + 8, y0 + header_h - 2), (x0 + panel_w - 8, y0 + header_h - 2), (50, 50, 60), 1)
+
+    # Render individual face cards
+    card_y = y0 + header_h + 2
+    for i, face in enumerate(tracked_faces[:max_cards]):
+        face_id = face.get("id", i + 1)
+        sparkline = per_face_sparklines.get(face_id, collections.deque(maxlen=40))
+        draw_face_comparison_card(frame, face, x0 + 6, card_y, panel_w - 12, card_h, sparkline)
+        card_y += card_h + 6
+
+    # Group mood summary footer
+    footer_y = y0 + panel_h - footer_h + 4
+    cv2.line(frame, (x0 + 8, footer_y - 4), (x0 + panel_w - 8, footer_y - 4), (50, 50, 60), 1)
+
+    group_vibe = compute_group_vibe(tracked_faces)
+    if group_vibe > 70:
+        gv_color = (50, 205, 50)
+        gv_label = "Upbeat"
+    elif group_vibe >= 45:
+        gv_color = (220, 220, 220)
+        gv_label = "Calm"
+    else:
+        gv_color = (34, 34, 220)
+        gv_label = "Tense"
+
+    cv2.putText(frame, f"GROUP VIBE: {group_vibe:.0f}% - {gv_label}", (x0 + 10, footer_y + 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, gv_color, 1)
+
+    # Group vibe bar
+    bar_x = x0 + 10
+    bar_w = panel_w - 20
+    bar_y = footer_y + 20
+    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + 10), (35, 35, 40), -1)
+    fill = int(bar_w * (group_vibe / 100.0))
+    if fill > 0:
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill, bar_y + 10), gv_color, -1)
+    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + 10), (60, 60, 70), 1)
+
+
 def draw_bottom_ribbon(frame, is_recording, is_mirrored):
     """Render keyboard controls guide & system state ribbon."""
     h, w = frame.shape[:2]
-    ribbon_text = "[Q] Quit | [H] HUD Mode | [V] Record | [S] Snap | [M] Mirror | [R] Face ID | [E] Export"
+    ribbon_text = "[Q] Quit | [H] HUD | [V] Record | [S] Snap | [M] Mirror | [R] Face ID | [C] Compare | [E] Export"
     cv2.putText(frame, ribbon_text, (20, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
 
 
@@ -528,6 +704,7 @@ def main():
     hud_mode = 0  # 0: Full Dashboard, 1: Minimalist, 2: Hidden
     is_mirrored = True
     is_recording = False
+    compare_mode = False  # Multi-face comparison panel toggle
     video_writer = None
     recording_start = 0.0
 
@@ -535,6 +712,7 @@ def main():
     toast_expiry = 0.0
 
     sparkline_data = collections.deque(maxlen=80)
+    per_face_sparklines = {}  # Per-face sparkline deques keyed by face ID
     emotion_counter = collections.Counter()
 
     prev_time = time.time()
@@ -546,7 +724,7 @@ def main():
     print("       [Q] Quit & Save Summary    [H] Cycle HUD Mode")
     print("       [V] Start/Stop Recording   [S] Capture Snapshot")
     print("       [M] Toggle Selfie Mirror   [R] Toggle Face Identification")
-    print("       [E] Export Session Report")
+    print("       [C] Compare Faces (Multi)  [E] Export Session Report")
     print("-" * 65)
 
     try:
@@ -586,6 +764,7 @@ def main():
                 dominant = face["dominant_emotion"]
                 scores = face["emotion_scores"]
                 name = face["name"]
+                face_id = face.get("id", 0)
 
                 emotion_counter[dominant] += 1
 
@@ -615,6 +794,17 @@ def main():
                 text_c = (0, 0, 0) if dominant.lower() in ["happy", "surprise", "neutral"] else (255, 255, 255)
                 cv2.putText(frame, badge_label, (rx + 7, tag_y2 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.52, text_c, 2)
 
+                # Update per-face sparkline
+                if face_id not in per_face_sparklines:
+                    per_face_sparklines[face_id] = collections.deque(maxlen=40)
+                per_face_sparklines[face_id].append(compute_vibe_index(scores))
+
+            # Prune sparklines for faces that are no longer tracked
+            active_ids = {f.get("id", 0) for f in tracked_faces}
+            stale_sparkline_ids = [k for k in per_face_sparklines if k not in active_ids]
+            for sid in stale_sparkline_ids:
+                del per_face_sparklines[sid]
+
             # Compute Vibe / Valence Index
             vibe_val = compute_vibe_index(primary_scores)
             sparkline_data.append(vibe_val)
@@ -640,6 +830,10 @@ def main():
                     primary_emotion,
                     vibe_val
                 )
+
+            # Multi-Face Comparison Panel (right side)
+            if compare_mode:
+                draw_face_comparison_panel(frame, tracked_faces, per_face_sparklines)
 
             # Bottom Ribbon Guide
             draw_bottom_ribbon(frame, is_recording, is_mirrored)
@@ -725,6 +919,12 @@ def main():
                     toast_message = "Recording Saved"
                     toast_expiry = time.time() + 2.0
                     print("[INFO] Video recording stopped and finalized.")
+
+            elif key == ord('c'):
+                # Toggle Multi-Face Comparison Panel
+                compare_mode = not compare_mode
+                toast_message = f"Compare: {'ON' if compare_mode else 'OFF'}"
+                toast_expiry = time.time() + 1.2
 
             elif key == ord('e'):
                 # Export Session Analytics
